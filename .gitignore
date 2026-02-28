@@ -1,0 +1,22 @@
+# 环境变量（含密钥，绝对不能提交）
+.env
+.env.*
+
+# 依赖目录（本地用 pip install -r requirements.txt -t ./site-packages 生成）
+site-packages/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 知识库 Excel 导出（临时文件）
+knowledge_base.xlsx
+
+# 打包产物
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
