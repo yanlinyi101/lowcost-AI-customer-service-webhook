@@ -14,13 +14,15 @@ import logging
 from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from ai_service import get_ai_reply, needs_human
-from config import WECHAT_ENCODING_AES_KEY, WECHAT_TOKEN, WECHAT_APP_ID
+from ai_service import get_ai_reply, needs_human, clear_history
+from cos_logger import log_chat
+from config import WECHAT_ENCODING_AES_KEY, WECHAT_TOKEN, WECHAT_APP_ID, KF_ACCOUNT
 from crypto import WeChatCrypto
 from wechat_api import (
     get_or_upload_media,
     send_image_message,
     send_text_message,
+    send_transfer_to_human,
     send_typing_indicator,
 )
 
@@ -34,6 +36,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="微信小程序 AI 客服", version="1.0.0")
+
+# MsgId 去重（防微信重试导致消息被处理两次）
+_processed_msg_ids: set[str] = set()
+_MSG_ID_MAX = 1000
 
 crypto = WeChatCrypto(
     token=WECHAT_TOKEN,
@@ -97,6 +103,15 @@ async def receive_message(
         logger.warning("消息验签失败，忽略本次请求")
         return PlainTextResponse("success")
 
+    msg_id = msg.get("MsgId", "")
+    if msg_id:
+        if msg_id in _processed_msg_ids:
+            logger.info(f"重复消息忽略 MsgId={msg_id}")
+            return PlainTextResponse("success")
+        if len(_processed_msg_ids) >= _MSG_ID_MAX:
+            _processed_msg_ids.clear()
+        _processed_msg_ids.add(msg_id)
+
     msg_type = msg.get("MsgType", "")
     openid = msg.get("FromUserName", "")
 
@@ -134,6 +149,8 @@ async def _handle_text(openid: str, text: str) -> None:
             openid,
             "好的，正在为您转接人工客服，请稍候。\n如暂无客服在线，我们会在工作时间（9:00-18:00）尽快联系您。"
         )
+        await send_transfer_to_human(openid, KF_ACCOUNT)  # 调用微信转接 API
+        clear_history(openid)   # 清除对话历史，转接后如用户重新发消息是全新会话
         logger.info(f"[转人工] openid={openid[:8]}...")
         return
 
@@ -142,6 +159,7 @@ async def _handle_text(openid: str, text: str) -> None:
 
     # 调用 AI 生成回复（同时返回知识库命中的图片链接）
     reply, image_urls = await get_ai_reply(openid, text)
+    await log_chat(openid, text, reply)   # 写入 COS 聊天日志
 
     # 1. 先发文字回复
     success = await send_text_message(openid, reply)

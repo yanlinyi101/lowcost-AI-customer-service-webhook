@@ -30,14 +30,16 @@ async def get_access_token() -> str:
     if _token_cache["value"] and now < _token_cache["expire_at"]:
         return _token_cache["value"]
 
-    url = (
-        f"https://api.weixin.qq.com/cgi-bin/token"
-        f"?grant_type=client_credential"
-        f"&appid={WECHAT_APP_ID}"
-        f"&secret={WECHAT_APP_SECRET}"
-    )
+    url = "https://api.weixin.qq.com/cgi-bin/stable_token"
+    body = {
+        "grant_type": "client_credential",
+        "appid": WECHAT_APP_ID,
+        "secret": WECHAT_APP_SECRET,
+        "force_refresh": False,
+    }
     async with httpx.AsyncClient() as client:
-        resp = await client.get(url, timeout=10)
+        resp = await client.post(url, json=body, timeout=10)
+        resp.raise_for_status()
         data = resp.json()
 
     token = data.get("access_token", "")
@@ -72,7 +74,7 @@ async def send_text_message(openid: str, content: str) -> bool:
         data = resp.json()
 
     if data.get("errcode", 0) != 0:
-        print(f"[微信API] 发送失败: {data}")
+        logger.error(f"[微信API] 发送失败: {data}")
         return False
     return True
 
@@ -184,3 +186,35 @@ async def send_typing_indicator(openid: str) -> None:
     }
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload, timeout=5)
+
+
+# ──────────────────────────────────────────
+# 转接人工客服
+# ──────────────────────────────────────────
+
+async def send_transfer_to_human(openid: str, kf_account: str = "") -> bool:
+    """
+    将对话转接给人工客服。
+    调用后该用户后续消息路由给微信客服平台，不再触发 Webhook。
+
+    kf_account: 指定客服账号（格式 xxx@公众号ID），留空则系统自动分配
+    """
+    token = await get_access_token()
+    url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={token}"
+
+    payload: dict = {
+        "touser": openid,
+        "msgtype": "transfer_customer_service",
+    }
+    if kf_account:
+        payload["transfer_customer_service"] = {"kf_account": kf_account}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, json=payload, timeout=10)
+        data = resp.json()
+
+    if data.get("errcode", 0) != 0:
+        logger.error(f"[转人工] 转接失败: {data}")
+        return False
+    logger.info(f"[转人工] 转接成功 openid={openid[:8]}...")
+    return True

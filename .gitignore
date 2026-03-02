@@ -10,7 +10,8 @@ __pycache__/
 *.py[cod]
 *.pyo
 
-# 知识库 Excel 导出（临时文件）
+# 知识库（含业务数据，不公开）
+knowledge_base.json
 knowledge_base.xlsx
 
 # 打包产物
