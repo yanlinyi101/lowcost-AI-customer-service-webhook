@@ -12,7 +12,7 @@ FastAPI 主入口
 import logging
 
 from fastapi import BackgroundTasks, FastAPI, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 
 from ai_service import get_ai_reply, needs_human, clear_history
 from cos_logger import log_chat
@@ -119,6 +119,19 @@ async def receive_message(
 
     if msg_type == "text":
         user_text = msg.get("Content", "").strip()
+
+        # 转人工：同步返回被动 XML，让微信立刻路由用户进入客服小助手待接入队列
+        if needs_human(user_text):
+            inner_xml = _build_transfer_xml(openid, timestamp, KF_ACCOUNT)
+            reply_xml = crypto.encrypt(inner_xml, timestamp, nonce)
+            await send_text_message(
+                openid,
+                "好的，正在为您转接人工客服，请稍候。\n如暂无客服在线，我们会在工作时间（9:00-18:00）尽快联系您。",
+            )
+            clear_history(openid)
+            logger.info(f"[转人工] 被动回复 openid={openid[:8]}... kf={KF_ACCOUNT or '(auto)'}")
+            return Response(content=reply_xml, media_type="application/xml")
+
         background_tasks.add_task(_handle_text, openid, user_text)
 
     elif msg_type == "event":
@@ -137,22 +150,31 @@ async def receive_message(
 
 
 # ──────────────────────────────────────────
+# 辅助函数
+# ──────────────────────────────────────────
+
+def _build_transfer_xml(openid: str, timestamp: str, kf_account: str = "") -> str:
+    """构建 transfer_customer_service 被动回复的内层 XML"""
+    trans_info = ""
+    if kf_account:
+        trans_info = f"<TransInfo><KfAccount><![CDATA[{kf_account}]]></KfAccount></TransInfo>"
+    return (
+        f"<xml>"
+        f"<ToUserName><![CDATA[{openid}]]></ToUserName>"
+        f"<FromUserName><![CDATA[{WECHAT_APP_ID}]]></FromUserName>"
+        f"<CreateTime>{timestamp}</CreateTime>"
+        f"<MsgType><![CDATA[transfer_customer_service]]></MsgType>"
+        f"{trans_info}"
+        f"</xml>"
+    )
+
+
+# ──────────────────────────────────────────
 # 异步处理逻辑
 # ──────────────────────────────────────────
 
 async def _handle_text(openid: str, text: str) -> None:
     """处理用户文本消息"""
-
-    # 检测是否请求转人工
-    if needs_human(text):
-        await send_text_message(
-            openid,
-            "好的，正在为您转接人工客服，请稍候。\n如暂无客服在线，我们会在工作时间（9:00-18:00）尽快联系您。"
-        )
-        await send_transfer_to_human(openid, KF_ACCOUNT)  # 调用微信转接 API
-        clear_history(openid)   # 清除对话历史，转接后如用户重新发消息是全新会话
-        logger.info(f"[转人工] openid={openid[:8]}...")
-        return
 
     # 发送"正在输入"提示（让用户知道消息已收到）
     await send_typing_indicator(openid)

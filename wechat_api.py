@@ -213,8 +213,19 @@ async def send_transfer_to_human(openid: str, kf_account: str = "") -> bool:
         resp = await client.post(url, json=payload, timeout=10)
         data = resp.json()
 
-    if data.get("errcode", 0) != 0:
-        logger.error(f"[转人工] 转接失败: {data}")
+    errcode = data.get("errcode", 0)
+    errmsg  = data.get("errmsg", "")
+
+    if errcode != 0:
+        logger.error(
+            f"[转人工] 转接失败 openid={openid[:8]}... "
+            f"kf_account={kf_account or '(auto)'} "
+            f"errcode={errcode} errmsg={errmsg}"
+        )
         return False
-    logger.info(f"[转人工] 转接成功 openid={openid[:8]}...")
+
+    logger.info(
+        f"[转人工] 转接成功 openid={openid[:8]}... "
+        f"kf_account={kf_account or '(auto)'} errmsg={errmsg}"
+    )
     return True

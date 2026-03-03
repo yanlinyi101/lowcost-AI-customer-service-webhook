@@ -64,6 +64,39 @@ class WeChatCrypto:
         msg_xml = plain[20: 20 + msg_len].decode("utf-8")
         return msg_xml
 
+    def encrypt(self, reply_msg: str, timestamp: str, nonce: str) -> str:
+        """
+        加密回复消息，生成安全模式被动回复外层 XML。
+        格式：16字节随机串 | 4字节消息长度 | 消息内容 | AppId，PKCS7填充后AES加密。
+        """
+        import os
+
+        rand_bytes = os.urandom(16)
+        msg_bytes = reply_msg.encode("utf-8")
+        msg_len_bytes = struct.pack(">I", len(msg_bytes))
+        app_id_bytes = self.app_id.encode("utf-8")
+
+        plain = rand_bytes + msg_len_bytes + msg_bytes + app_id_bytes
+
+        # PKCS7 填充（块大小32字节）
+        block_size = 32
+        pad_len = block_size - len(plain) % block_size
+        plain += bytes([pad_len] * pad_len)
+
+        cipher = AES.new(self.aes_key, AES.MODE_CBC, self.aes_key[:16])
+        encrypted = base64.b64encode(cipher.encrypt(plain)).decode("utf-8")
+
+        msg_signature = self._sha1(self.token, timestamp, nonce, encrypted)
+
+        return (
+            f"<xml>"
+            f"<Encrypt><![CDATA[{encrypted}]]></Encrypt>"
+            f"<MsgSignature><![CDATA[{msg_signature}]]></MsgSignature>"
+            f"<TimeStamp>{timestamp}</TimeStamp>"
+            f"<Nonce><![CDATA[{nonce}]]></Nonce>"
+            f"</xml>"
+        )
+
     # ──────────────────────────────────────────
     # XML 解析
     # ──────────────────────────────────────────
